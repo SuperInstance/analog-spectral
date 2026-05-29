@@ -2,5 +2,8 @@
 name = "analog-spectral"
 version = "0.1.0"
 edition = "2024"
+description = "Analog eigenvalue computation. Dials settle under gravity. Deadband = spectral gap. The thermostat IS the algorithm."
+license = "MIT"
+repository = "https://github.com/SuperInstance/analog-spectral"
 
 [dependencies]
