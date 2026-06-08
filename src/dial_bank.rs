@@ -1,23 +1,46 @@
+//! Coupled dial bank — N dials connected by a coupling matrix.
+//!
+//! The coupling matrix acts like a graph adjacency/weight matrix. Each dial
+//! feels forces from its neighbors proportional to coupling strength. When
+//! the bank settles, the dial positions approximate eigenvectors and the
+//! Rayleigh quotient gives the eigenvalue estimate.
+//!
+//! This IS the Jacobi eigenvalue algorithm, but phrased as physical dynamics.
+
 use crate::analog_dial::AnalogDial;
 
-/// N coupled dials settle to the eigenvectors of the coupling matrix.
-/// This IS Jacobi eigenvalue computation, but phrased as physical dynamics.
+/// A bank of N coupled analog dials for eigenvalue computation.
+///
+/// Each dial corresponds to a component of the eigenvector. The coupling
+/// matrix determines how dials influence each other — off-diagonal entries
+/// create inter-dial forces that drive the system toward eigenvector alignment.
+///
+/// # Algorithm
+///
+/// 1. Initialize dials near the diagonal of the coupling matrix
+/// 2. Step all dials simultaneously (parallel analog computation)
+/// 3. Read settled positions as eigenvector components
+/// 4. Compute Rayleigh quotient for eigenvalue estimate
 pub struct DialBank {
+    /// The individual dials — one per eigenvector component.
     pub dials: Vec<AnalogDial>,
+    /// N×N coupling (weight) matrix — acts as the graph's adjacency structure.
     pub coupling: Vec<Vec<f64>>,
 }
 
 impl DialBank {
+    /// Create a bank of N dials coupled by the given matrix.
+    ///
+    /// Dials are initialized near the diagonal values with small perturbations
+    /// to seed convergence. Gravity is 10.0, friction is 0.5 by default.
     pub fn new(n: usize, coupling: Vec<Vec<f64>>) -> DialBank {
         let mut dials = Vec::with_capacity(n);
-        // Initialize dials at positions derived from the coupling matrix diagonal
         for i in 0..n {
             let diag = if i < coupling.len() && i < coupling[i].len() {
                 coupling[i][i]
             } else {
                 1.0
             };
-            // Start from a small perturbation off-diagonal to seed convergence
             let mut dial = AnalogDial::new(diag, 10.0, 0.5);
             dial.position = if i == 0 { diag + 0.1 } else { diag - 0.1 * (i as f64) };
             dial.velocity = 0.0;
@@ -26,40 +49,45 @@ impl DialBank {
         DialBank { dials, coupling }
     }
 
-    /// All dials step simultaneously (parallel analog computation).
+    /// Advance all dials by one timestep simultaneously.
+    ///
+    /// Forces are computed from the coupling matrix before any dial is updated,
+    /// ensuring symmetric force application (Gauss-Seidel-free update).
     pub fn step(&mut self, dt: f64) {
         let n = self.dials.len();
 
         // Compute forces from coupling before updating any dial
         let mut forces: Vec<f64> = vec![0.0; n];
-        for i in 0..n {
+        for (i, force_i) in forces.iter_mut().enumerate() {
             // Self-restoring force toward own setpoint
             let displacement = self.dials[i].position - self.dials[i].setpoint;
-            forces[i] += -self.dials[i].gravity * displacement;
+            *force_i += -self.dials[i].gravity * displacement;
 
             // Coupling forces from other dials
-            for j in 0..n {
+            for (j, dial_j) in self.dials.iter().enumerate() {
                 if i != j && i < self.coupling.len() && j < self.coupling[i].len() {
-                    // Off-diagonal coupling pulls dial i toward weighted average with j
                     let coupling_strength = self.coupling[i][j];
-                    let diff = self.dials[j].position - self.dials[i].position;
-                    forces[i] += coupling_strength * diff * 0.5;
+                    let diff = dial_j.position - self.dials[i].position;
+                    *force_i += coupling_strength * diff * 0.5;
                 }
             }
 
             // Damping
-            forces[i] += -self.dials[i].friction * self.dials[i].velocity;
+            *force_i += -self.dials[i].friction * self.dials[i].velocity;
         }
 
         // Apply forces
-        for i in 0..n {
-            let accel = forces[i] / self.dials[i].mass;
+        for (i, force_i) in forces.iter().enumerate() {
+            let accel = force_i / self.dials[i].mass;
             self.dials[i].velocity += accel * dt;
             self.dials[i].position += self.dials[i].velocity * dt;
         }
     }
 
-    /// Settle all dials. Returns total steps.
+    /// Settle all dials to equilibrium. Returns total steps taken.
+    ///
+    /// Convergence is checked by maximum position change and maximum velocity.
+    /// Both must fall below `tolerance` simultaneously.
     pub fn settle(&mut self, dt: f64, tolerance: f64) -> usize {
         let max_steps = 10_000_000;
         for i in 0..max_steps {
@@ -71,7 +99,6 @@ impl DialBank {
                 .fold(0.0f64, f64::max);
 
             if max_change < tolerance {
-                // Also check velocities are small
                 let max_vel = self.dials.iter()
                     .map(|d| d.velocity.abs())
                     .fold(0.0f64, f64::max);
@@ -83,17 +110,19 @@ impl DialBank {
         max_steps
     }
 
-    /// Read the settled positions — these ARE the eigenvector components.
+    /// Read the settled dial positions — these approximate eigenvector components.
     pub fn read_positions(&self) -> Vec<f64> {
         self.dials.iter().map(|d| d.position).collect()
     }
 
-    /// Estimate eigenvalue from settled state using Rayleigh quotient.
+    /// Estimate the dominant eigenvalue using the Rayleigh quotient.
+    ///
+    /// Rayleigh quotient: λ ≈ (xᵀAx) / (xᵀx), where x is the dial position
+    /// vector and A is the coupling matrix.
     pub fn eigenvalue_estimate(&self) -> f64 {
         let pos = self.read_positions();
         let n = pos.len();
 
-        // Rayleigh quotient: (x^T A x) / (x^T x)
         let mut numerator = 0.0;
         let mut denominator = 0.0;
 
@@ -113,13 +142,14 @@ impl DialBank {
         }
     }
 
-    /// Verify eigenvector by computing residual ||Ax - λx|| / ||x||.
+    /// Verify the eigenvector by computing the residual ||Ax − λx|| / ||x||.
+    ///
+    /// A smaller residual indicates a better eigenvector approximation.
     pub fn verify_eigenvector(&self, adj: &[Vec<f64>]) -> f64 {
         let pos = self.read_positions();
         let n = pos.len();
         let lambda = self.eigenvalue_estimate();
 
-        // Compute Ax
         let mut ax = vec![0.0; n];
         for i in 0..n {
             for j in 0..n {
@@ -129,7 +159,6 @@ impl DialBank {
             }
         }
 
-        // Compute ||Ax - λx|| / ||x||
         let mut residual = 0.0;
         let mut norm_x = 0.0;
         for i in 0..n {

@@ -1,31 +1,60 @@
-/// A spectral thermostat — uses deadband logic to control a system.
-/// This is what a real thermostat does, but formalized.
+//! Spectral thermostat — deadband-based control for spectral computation.
+//!
+//! A thermostat monitors a spectral quantity (e.g., condition ratio) and
+//! applies deadband logic to decide whether to increase or decrease
+//! computational effort. Within the deadband, the system is "close enough"
+//! and no action is taken.
 
+/// State of the thermostat relative to its setpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ThermostatState {
+    /// Value is below the deadband — needs increase.
     Heating,
+    /// Value is above the deadband — needs decrease.
     Cooling,
+    /// Value is within the deadband — no action needed.
     Stable,
 }
 
+/// Control action decided by the thermostat.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
+    /// Increase the condition ratio (value too low).
     IncreaseCR,
+    /// Decrease the condition ratio (value too high).
     DecreaseCR,
+    /// Within deadband — no action needed.
     DoNothing,
 }
 
+/// A spectral thermostat using deadband logic to control computation.
+///
+/// The thermostat monitors a single scalar quantity and decides whether
+/// it needs adjustment based on a setpoint and deadband width. Within
+/// the deadband, the system is considered stable.
+///
+/// # Physical Analogy
+///
+/// Like a real thermostat, this controller only acts when the value
+/// drifts outside the comfort zone (deadband). This avoids oscillation
+/// from noisy measurements near the setpoint.
 pub struct SpectralThermostat {
+    /// Target value for the controlled quantity.
     pub setpoint: f64,
+    /// Half-width of the deadband around the setpoint.
     pub deadband: f64,
+    /// Most recently measured value.
     pub current: f64,
+    /// History of all measurements.
     pub history: Vec<f64>,
+    /// History of all actions taken.
     pub action_history: Vec<Action>,
     state: ThermostatState,
     stable_count: usize,
 }
 
 impl SpectralThermostat {
+    /// Create a new thermostat targeting `setpoint` with the given deadband.
     pub fn new(setpoint: f64, deadband: f64) -> SpectralThermostat {
         SpectralThermostat {
             setpoint,
@@ -38,7 +67,10 @@ impl SpectralThermostat {
         }
     }
 
-    /// Measure and decide action based on deadband logic.
+    /// Measure a value and decide the control action.
+    ///
+    /// If the value is within [setpoint − deadband, setpoint + deadband],
+    /// returns `DoNothing`. Otherwise returns `IncreaseCR` or `DecreaseCR`.
     pub fn measure(&mut self, cr: f64) -> Action {
         self.current = cr;
         self.history.push(cr);
@@ -63,12 +95,15 @@ impl SpectralThermostat {
         action
     }
 
-    /// Steps since last non-DoNothing action.
+    /// Number of consecutive stable measurements since the last action.
     pub fn stability_duration(&self) -> usize {
         self.stable_count
     }
 
-    /// Hysteresis: fraction of measurements that triggered an action.
+    /// Hysteresis ratio: fraction of measurements that triggered an action.
+    ///
+    /// A higher hysteresis means the system oscillates more. Low hysteresis
+    /// means the value stays within the deadband.
     pub fn hysteresis(&self) -> f64 {
         if self.action_history.is_empty() {
             return 0.0;
@@ -79,7 +114,7 @@ impl SpectralThermostat {
         actions as f64 / self.action_history.len() as f64
     }
 
-    /// Current state.
+    /// Current thermostat state.
     pub fn state(&self) -> &ThermostatState {
         &self.state
     }

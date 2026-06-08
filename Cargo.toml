@@ -1,5 +1,5 @@
 [package]
-rust-version = "1.70"
+rust-version = "1.85"
 readme = "README.md"
 name = "analog-spectral"
 version = "0.1.0"
