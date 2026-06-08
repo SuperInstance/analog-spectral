@@ -1,0 +1,15 @@
+[package]
+name = "analog-spectral"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Analog eigenvalue computation — dials settle under gravity to spectral decomposition"
+repository = "https://github.com/SuperInstance/analog-spectral"
+keywords = ["eigenvalue", "spectral", "physics", "simulation", "linear-algebra"]
+categories = ["mathematics", "science", "simulation"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+
+[dev-dependencies]
